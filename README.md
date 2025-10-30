@@ -33,20 +33,22 @@ Running the bot:
 
 bash
 python main.py
-Project structure
-text
+Project Structure:
+
 vpn-bot-telegram/
-├── main.py
-├── requirements.txt
-├── README.md
-└── app/
- ├── __init__.py
- ├── handlers.py
- ├── admin_panel.py
- ├── database.py
- ├── payments.py
- ├── keyboards.py
- └── update_db.py
+main.py
+requirements.txt
+README.md
+
+app/
+init.py
+handlers.py
+admin_panel.py
+database.py
+payments.py
+keyboards.py
+update_db.py
+
 Description of modules
 main.py - main file for starting the bot
 app/handlers.py - message and command handlers
