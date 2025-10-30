@@ -15,7 +15,7 @@ Installation and configuration
 Repository cloning:
 
 bash
-git clone https://github.com/ваш-username/vpn-bot-telegram.git
+git clone https://github.com/your-username/vpn-bot-telegram.git
 cd vpn-bot-telegram
 Installing dependencies:
 
