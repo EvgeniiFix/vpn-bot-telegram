@@ -1,0 +1,218 @@
+from aiogram import Router, F
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import Command
+import sqlite3
+from app.config import ADMIN_ID
+
+admin_router = Router()
+
+# Проверка на админа
+def is_admin(user_id: int) -> bool:
+    return user_id == ADMIN_ID
+
+# === Статистика бота ===
+@admin_router.message(Command("stats"))
+async def stats_handler(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    from app.database import get_user_stats
+    stats = get_user_stats()
+
+    await message.answer(
+        f"📊 <b>Статистика бота:</b>\n\n"
+        f"👥 <b>Всего пользователей:</b> {stats['total_users']}\n"
+        f"✅ <b>Активных подписок:</b> {stats['active_subscriptions']}\n"
+        f"💰 <b>Успешных платежей:</b> {stats['successful_payments']}\n"
+        f"💵 <b>Общая выручка:</b> {stats['total_revenue']} ₽",
+        parse_mode="HTML"
+    )
+
+# === Список пользователей ===
+@admin_router.message(Command("users"))
+async def users_handler(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    conn = sqlite3.connect("vpn_bot.db")
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT user_id, username, first_name, reg_date 
+        FROM users 
+        ORDER BY id DESC 
+        LIMIT 20
+    """)
+    users = cursor.fetchall()
+
+    conn.close()
+
+    if not users:
+        await message.answer("📝 Пользователей пока нет")
+        return
+
+    users_text = "📋 <b>Последние 20 пользователей:</b>\n\n"
+    for user in users:
+        user_id, username, first_name, reg_date = user
+        username = username if username else "Нет username"
+        users_text += f"👤 {first_name} (@{username})\n"
+        users_text += f"🆔 ID: {user_id}\n"
+        users_text += f"📅 Регистрация: {reg_date}\n"
+        users_text += "─" * 20 + "\n"
+
+    await message.answer(users_text, parse_mode="HTML")
+
+# === Список подписок ===
+@admin_router.message(Command("subs"))
+async def subscriptions_handler(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    conn = sqlite3.connect("vpn_bot.db")
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT s.user_id, u.username, u.first_name, s.server, s.start_date, s.end_date 
+        FROM subscriptions s
+        LEFT JOIN users u ON s.user_id = u.user_id
+        WHERE s.status = 'active' AND s.end_date > datetime('now')
+        ORDER BY s.id DESC 
+        LIMIT 20
+    """)
+    subscriptions = cursor.fetchall()
+
+    conn.close()
+
+    if not subscriptions:
+        await message.answer("📝 Активных подписок нет")
+        return
+
+    subs_text = "📋 <b>Последние 20 активных подписок:</b>\n\n"
+    for sub in subscriptions:
+        user_id, username, first_name, server, start_date, end_date = sub
+        username = username if username else "Нет username"
+        subs_text += f"👤 {first_name} (@{username})\n"
+        subs_text += f"🆔 ID: {user_id}\n"
+        subs_text += f"🌐 Сервер: {server}\n"
+        subs_text += f"📅 Начало: {start_date}\n"
+        subs_text += f"📅 Окончание: {end_date}\n"
+        subs_text += "─" * 20 + "\n"
+
+    await message.answer(subs_text, parse_mode="HTML")
+
+# === Платежи ===
+@admin_router.message(Command("payments"))
+async def payments_handler(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    conn = sqlite3.connect("vpn_bot.db")
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT p.user_id, u.username, u.first_name, p.amount, p.status, p.created_date, p.label 
+        FROM payments p
+        LEFT JOIN users u ON p.user_id = u.user_id
+        ORDER BY p.id DESC 
+        LIMIT 20
+    """)
+    payments = cursor.fetchall()
+
+    conn.close()
+
+    if not payments:
+        await message.answer("📝 Платежей пока нет")
+        return
+
+    payments_text = "💰 <b>Последние 20 платежей:</b>\n\n"
+    for payment in payments:
+        user_id, username, first_name, amount, status, created_date, label = payment
+        username = username if username else "Нет username"
+        status_icon = "✅" if status == "success" else "⏳" if status == "pending" else "❌"
+
+        payments_text += f"👤 {first_name} (@{username})\n"
+        payments_text += f"🆔 ID: {user_id}\n"
+        payments_text += f"💵 Сумма: {amount} ₽\n"
+        payments_text += f"📊 Статус: {status_icon} {status}\n"
+        payments_text += f"📅 Дата: {created_date}\n"
+        payments_text += f"🏷️ Label: {label}\n"
+        payments_text += "─" * 20 + "\n"
+
+    await message.answer(payments_text, parse_mode="HTML")
+
+# === Рассылка ===
+@admin_router.message(Command("broadcast"))
+async def broadcast_handler(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    # Получаем текст рассылки (всё после команды)
+    broadcast_text = message.text.replace('/broadcast', '').strip()
+
+    if not broadcast_text:
+        await message.answer("❌ <b>Использование:</b>\n/broadcast ваш текст рассылки", parse_mode="HTML")
+        return
+
+    conn = sqlite3.connect("vpn_bot.db")
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT user_id FROM users")
+    users = cursor.fetchall()
+    conn.close()
+
+    total_users = len(users)
+    successful = 0
+    failed = 0
+
+    status_msg = await message.answer(f"📢 <b>Начинаю рассылку...</b>\nОбработано: 0/{total_users}", parse_mode="HTML")
+
+    from aiogram import Bot
+    from app.config import BOT_TOKEN
+    bot = Bot(token=BOT_TOKEN)
+
+    for i, (user_id,) in enumerate(users, 1):
+        try:
+            await bot.send_message(user_id, broadcast_text)
+            successful += 1
+        except Exception as e:
+            failed += 1
+            print(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
+
+        # Обновляем статус каждые 10 пользователей
+        if i % 10 == 0 or i == total_users:
+            await status_msg.edit_text(
+                f"📢 <b>Рассылка в процессе...</b>\n"
+                f"Обработано: {i}/{total_users}\n"
+                f"✅ Успешно: {successful}\n"
+                f"❌ Ошибок: {failed}",
+                parse_mode="HTML"
+            )
+
+    await message.answer(
+        f"📢 <b>Рассылка завершена!</b>\n\n"
+        f"👥 Всего пользователей: {total_users}\n"
+        f"✅ Успешно отправлено: {successful}\n"
+        f"❌ Не удалось отправить: {failed}",
+        parse_mode="HTML"
+    )
+
+# === Помощь по админ-панели ===
+@admin_router.message(Command("admin"))
+async def admin_help_handler(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    help_text = (
+        "🛠️ <b>Админ-панель VPN бота</b>\n\n"
+        "Доступные команды:\n\n"
+        "📊 <b>/stats</b> - Статистика бота\n"
+        "👥 <b>/users</b> - Список пользователей\n"
+        "🔔 <b>/subs</b> - Список подписок\n"
+        "💰 <b>/payments</b> - История платежей\n"
+        "📢 <b>/broadcast</b> - Рассылка сообщений\n"
+        "🛠️ <b>/admin</b> - Эта справка\n\n"
+        "Пример рассылки:\n"
+        "<code>/broadcast Важное обновление! Бот будет обновлен завтра с 03:00 до 04:00</code>"
+    )
+
+    await message.answer(help_text, parse_mode="HTML")
