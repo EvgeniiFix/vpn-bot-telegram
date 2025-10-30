@@ -1,0 +1,46 @@
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+# Главное меню инлайн
+def get_main_inline_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Купить доступ 🛒", callback_data="buy_access")],
+            [InlineKeyboardButton(text="Инструкции 📖", callback_data="instructions")],
+            [InlineKeyboardButton(text="Мой сервер 🌐", callback_data="show_server")],
+            [
+                InlineKeyboardButton(text="Политика конфиденциальности 🔒", url="https://telegra.ph/Politika-konfidencialnosti-bvk-VPN-10-27"),
+                InlineKeyboardButton(text="Пользовательское соглашение 📝", url="https://telegra.ph/Polzovatelskoe-soglashenie-bvk-VPN-10-27")
+            ]
+            # УБРАЛИ кнопку поддержки
+        ]
+    )
+
+# Главное меню для новых пользователей
+def get_welcome_inline_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🎁 Получить бесплатный конфиг", callback_data="show_server")],
+            [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="buy_access")],
+            [InlineKeyboardButton(text="📘 Инструкция", callback_data="instructions")]
+            # УБРАЛИ кнопку поддержки и "Другие серверы"
+        ]
+    )
+
+# Остальные функции без изменений...
+def get_subscription_inline_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="1 месяц — 150 ₽", callback_data="sub_1month")],
+            [InlineKeyboardButton(text="3 месяца — 430 ₽", callback_data="sub_3month")],
+            [InlineKeyboardButton(text="6 месяцев — 850 ₽", callback_data="sub_6month")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
+        ]
+    )
+
+def get_servers_inline_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🇩🇪 Германия", callback_data="server_germany")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_subscription")]
+        ]
+    )
