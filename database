@@ -1,0 +1,254 @@
+import sqlite3
+import logging
+from datetime import datetime, timedelta
+from contextlib import contextmanager
+
+logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def get_db_connection():
+    """Контекстный менеджер для работы с базой данных"""
+    conn = sqlite3.connect("vpn_bot.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+    except Exception as e:
+        logger.error(f"Ошибка базы данных: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def init_db():
+    """Инициализация базы данных"""
+    with get_db_connection() as conn:
+        cur = conn.cursor()
+
+        # Таблица пользователей
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER UNIQUE NOT NULL,
+            username TEXT,
+            first_name TEXT,
+            reg_date TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
+        # Таблица подписок
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            server TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            status TEXT DEFAULT 'active',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
+        )
+        """)
+
+        # Таблица платежей
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            label TEXT UNIQUE NOT NULL,
+            server TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            days INTEGER NOT NULL,
+            status TEXT DEFAULT 'pending',
+            created_date TEXT NOT NULL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
+        )
+        """)
+        cur.execute("""
+               CREATE TABLE IF NOT EXISTS user_configs (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   user_id INTEGER NOT NULL,
+                   server_name TEXT NOT NULL,
+                   uuid TEXT NOT NULL,
+                   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                   UNIQUE(user_id, server_name)
+               )
+               """)
+
+        # Индексы
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(status)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_payments_label ON payments(label)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_payments_user_id ON payments(user_id)")
+
+        conn.commit()
+    logger.info("✅ База данных инициализирована")
+
+
+def check_and_fix_database():
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        try:
+            # Проверяем наличие колонки status в subscriptions
+            cursor.execute("PRAGMA table_info(subscriptions)")
+            columns = [column[1] for column in cursor.fetchall()]
+
+            if 'status' not in columns:
+                logger.error("❌ КРИТИЧЕСКАЯ ОШИБКА: колонка status отсутствует!")
+                logger.info("Добавляем колонку status...")
+                cursor.execute("ALTER TABLE subscriptions ADD COLUMN status TEXT DEFAULT 'active'")
+                cursor.execute("UPDATE subscriptions SET status = 'active' WHERE status IS NULL")
+                conn.commit()
+                logger.info("✅ Колонка status добавлена в таблицу subscriptions")
+            else:
+                logger.info("✅ Структура базы данных в порядке")
+
+        except Exception as e:
+            logger.error(f"Ошибка проверки структуры БД: {e}")
+            raise
+
+
+def add_user(user_id, username, first_name, reg_date):
+    
+    with get_db_connection() as conn:
+        cur = conn.cursor()
+
+        try:
+            # Пытаемся добавить пользователя
+            cur.execute("""
+                INSERT OR IGNORE INTO users (user_id, username, first_name, reg_date)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, username, first_name, reg_date))
+
+            conn.commit()
+
+            # Проверяем, был ли это новый пользователь
+            if cur.rowcount > 0:
+                logger.info(f"✅ Добавлен НОВЫЙ пользователь: user_id={user_id}, username={username}")
+                return True
+            else:
+                logger.debug(f"👤 Пользователь уже существует: user_id={user_id}")
+                return False
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка добавления пользователя {user_id}: {e}")
+            conn.rollback()
+            return False
+
+
+def add_subscription(user_id, server, start_date, end_date):
+    """Добавление подписки"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO subscriptions (user_id, server, start_date, end_date)
+            VALUES (?, ?, ?, ?)
+        """, (user_id, server, start_date, end_date))
+        conn.commit()
+        logger.info(f"✅ Добавлена подписка: user_id={user_id}, server={server}, до {end_date}")
+
+
+def get_user_subscription(user_id):
+    """Получение подписки пользователя"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM subscriptions 
+            WHERE user_id = ? AND status = 'active' AND end_date > datetime('now')
+            ORDER BY id DESC LIMIT 1
+        """, (user_id,))
+        subscription = cursor.fetchone()
+        return dict(subscription) if subscription else None
+
+
+def save_payment_label(user_id, label, server, amount, days, status="pending"):
+    """Сохранение информации о платеже"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO payments (user_id, label, server, amount, days, status, created_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, label, server, amount, days, status, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        conn.commit()
+        logger.info(f"💰 Сохранен платеж: label={label}, user_id={user_id}, amount={amount}")
+
+
+def update_payment_status(label, status):
+    """Обновление статуса платежа"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE payments 
+            SET status = ?, updated_at = CURRENT_TIMESTAMP 
+            WHERE label = ?
+        """, (status, label))
+        conn.commit()
+        logger.info(f"📊 Обновлен статус платежа: label={label}, status={status}")
+
+
+def get_payment_by_label(label):
+    """Получение платежа по label"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM payments WHERE label = ?", (label,))
+        payment = cursor.fetchone()
+        return dict(payment) if payment else None
+
+
+def get_pending_payments():
+    """Получение всех ожидающих платежей"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM payments WHERE status = 'pending'")
+        payments = cursor.fetchall()
+        return [dict(payment) for payment in payments]
+
+
+def delete_subscription(user_id):
+    """Удаление подписки пользователя"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
+        conn.commit()
+        logger.info(f"🗑️ Удалена подписка пользователя: user_id={user_id}")
+
+
+def get_expired_subscriptions():
+    """Получение истекших подписок"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM subscriptions 
+            WHERE status = 'active' AND end_date <= datetime('now')
+        """)
+        subscriptions = cursor.fetchall()
+        return [dict(sub) for sub in subscriptions]
+
+
+def get_user_stats():
+    """Получение статистики пользователей"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT COUNT(*) FROM users")
+        total_users = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM subscriptions WHERE status = 'active' AND end_date > datetime('now')")
+        active_subscriptions = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM payments WHERE status = 'success'")
+        successful_payments = cursor.fetchone()[0]
+
+        cursor.execute("SELECT SUM(amount) FROM payments WHERE status = 'success'")
+        total_revenue = cursor.fetchone()[0] or 0
+
+        return {
+            'total_users': total_users,
+            'active_subscriptions': active_subscriptions,
+            'successful_payments': successful_payments,
+            'total_revenue': total_revenue
+        }
