@@ -1,0 +1,124 @@
+import uuid
+import asyncio
+import logging
+from yookassa import Configuration, Payment
+from app.config import YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY
+from app.database import get_pending_payments, update_payment_status, add_subscription
+from datetime import datetime, timedelta
+from aiogram import Bot
+from app.config import BOT_TOKEN
+
+logger = logging.getLogger(__name__)
+
+
+Configuration.account_id = YOOKASSA_SHOP_ID
+Configuration.secret_key = YOOKASSA_SECRET_KEY
+
+def create_payment_link(user_id: int, duration: str, server: str, amount: int):
+    try:
+        idempotence_key = str(uuid.uuid4())
+
+        payment_data = {
+            "amount": {"value": f"{amount}.00", "currency": "RUB"},
+            "confirmation": {"type": "redirect", "return_url": "https://t.me/bvkvpnbot"},
+            "capture": True,
+            "description": f"VPN подписка ({duration}, {server})",
+            "metadata": {"user_id": user_id, "duration": duration, "server": server},
+            "receipt": {
+                "customer": {"email": "user@example.com"},  # Обязательный параметр
+                "items": [
+                    {
+                        "description": f"VPN подписка: {duration}",
+                        "quantity": "1",
+                        "amount": {"value": f"{amount}.00", "currency": "RUB"},
+                        "vat_code": "1",  # НДС 20%
+                        "payment_mode": "full_payment",
+                        "payment_subject": "service"
+                    }
+                ]
+            }
+        }
+
+        payment = Payment.create(payment_data, idempotence_key)
+
+        label = f"yk_{payment.id}"
+        logger.info(f"💰 Создан платеж: {payment.id} для user_id={user_id}")
+
+        return payment.confirmation.confirmation_url, label
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка создания платежа: {e}")
+        return None, None
+
+# Остальной код без изменений...
+async def check_pending_payments_task():
+    
+    while True:
+        try:
+            await check_yookassa_payments()
+            await asyncio.sleep(30)
+        except Exception as e:
+            logger.error(f"❌ Ошибка проверки платежей: {e}")
+            await asyncio.sleep(60)
+
+async def check_yookassa_payments():
+    """статус платежей""
+    pending_payments = get_pending_payments()
+
+    for payment in pending_payments:
+        if payment['label'].startswith('yk_') and payment['status'] == "pending":
+            payment_id = payment['label'][3:]
+
+            try:
+                payment_info = Payment.find_one(payment_id)
+
+                if payment_info.status == 'succeeded':
+                    logger.info(f"✅ Платеж подтвержден: {payment_id}")
+                    await activate_subscription(
+                        payment['user_id'],
+                        payment['label'],
+                        payment['server'],
+                        payment['days']
+                    )
+                elif payment_info.status == 'canceled':
+                    logger.info(f"❌ Платеж отменен: {payment_id}")
+                    update_payment_status(payment['label'], 'failed')
+
+            except Exception as e:
+                logger.error(f"⚠️ Ошибка проверки платежа {payment_id}: {e}")
+
+async def activate_subscription(user_id, label, server, days):
+    """Активирует подписку пользователя"""
+    try:
+        from app.database import get_user_subscription, delete_subscription
+
+        # УДАЛЯЕМ старую подписку если есть
+        existing_sub = get_user_subscription(user_id)
+        if existing_sub:
+            delete_subscription(user_id)
+            logger.info(f"🗑️ Удалена старая подписка для user_id={user_id}")
+
+        # Активируем новую подписку
+        start_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        end_date = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+
+        add_subscription(user_id, server, start_date, end_date)
+        update_payment_status(label, "success")
+
+
+        # Уведомляем пользователя
+        bot = Bot(token=BOT_TOKEN)
+        await bot.send_message(
+            user_id,
+            f"✅ <b>Оплата прошла успешно!</b>\n\n"
+            f"🌐 <b>Новый сервер:</b> {server}\n"
+            f"📅 <b>Активен до:</b> {end_date}\n\n"
+            f"Старый сервер был автоматически заменен.\n\n"
+            f"Нажмите 'Показать купленный сервер' для получения конфигурации.",
+            parse_mode="HTML"
+        )
+
+        logger.info(f"🎉 Подписка активирована для user_id={user_id}, сервер: {server}, дней: {days}")
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка активации подписки: {e}")
