@@ -1,0 +1,38 @@
+import sqlite3
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def update_database():
+    conn = sqlite3.connect("vpn_bot.db")
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("PRAGMA table_info(subscriptions)")
+        columns = [column[1] for column in cursor.fetchall()]
+
+        if 'status' not in columns:
+            cursor.execute("ALTER TABLE subscriptions ADD COLUMN status TEXT DEFAULT 'active'")
+            logger.info("Добавлена колонка status в таблицу subscriptions")
+
+
+        if 'created_at' not in columns:
+            cursor.execute("ALTER TABLE subscriptions ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP")
+            logger.info("Добавлена колонка created_at в таблицу subscriptions")
+
+ 
+        cursor.execute("UPDATE subscriptions SET status = 'active' WHERE status IS NULL")
+
+        conn.commit()
+        logger.info("База данных успешно обновлена")
+
+    except Exception as e:
+        logger.error(f"Ошибка обновления базы: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    update_database()
